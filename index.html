@@ -312,6 +312,20 @@ function nextCierre(card){
     .sort(function(a,b){return a.cierre-b.cierre;});
   return c[0]||null;
 }
+/* ── ¿el resumen de este mes, para esta tarjeta, ya se debitó? ──
+   Débito automático: se paga el día del vencimiento.
+   Corte conservador: la cuota deja de contar el día DESPUÉS de vencer. */
+function resIdx(c){var d=ser2date(c.resumenS);return d?moIdx(mOf(d),yOf(d)):null;}
+function isPaid(card,mIdx){
+  var rows=cierres.filter(function(x){return x.card===card&&resIdx(x)!==null;});
+  if(!rows.length)return false;                       /* sin info → no supongo nada */
+  var minR=Math.min.apply(null,rows.map(resIdx));
+  if(mIdx<minR)return true;                           /* anterior al primer cierre cargado */
+  var r=null;rows.forEach(function(x){if(resIdx(x)===mIdx)r=x;});
+  if(!r||!r.venc)return false;                        /* mes futuro sin cierre cargado */
+  var t=new Date();t.setHours(0,0,0,0);
+  return r.venc<t;
+}
 function daysTo(d){if(!d)return"--";var n=new Date();n.setHours(0,0,0,0);var diff=Math.ceil((d-n)/864e5);return diff<0?"Pasó":diff+"d";}
 function ensureSel(){
   var ms=allMonths();
@@ -561,31 +575,36 @@ function trend(key){
 }
 
 function rCuotas(){
-  var n=new Date(),ni=moIdx(n.getMonth()+1,n.getFullYear()),list=[];
+  var list=[];
   movs.forEach(function(e){
     if(e.cuotas<=1)return;
     if(cardFil!=="all"&&e.card!==cardFil)return;
-    var fi=moIdx(e.fm,e.fy),li=fi+e.cuotas-1;
-    if(li<ni)return;
-    var per=Math.round(e.total/e.cuotas*100)/100,cn=ni-fi+1,started=cn>=1;
-    var paid=started?Math.min(e.cuotas,cn-1):0;
-    list.push({e:e,per:per,cn:cn,started:started,paid:paid,rem:per*(e.cuotas-paid),fi:fi});
+    var per=Math.round(e.total/e.cuotas*100)/100;
+    var fi=moIdx(e.fm,e.fy),segs=[],paid=0,firstOpen=-1;
+    for(var i=0;i<e.cuotas;i++){
+      var p=isPaid(e.card,fi+i);
+      segs.push(p);
+      if(p)paid++;else if(firstOpen<0)firstOpen=i;
+    }
+    if(firstOpen<0)return;                       /* todas debitadas → no debe nada */
+    list.push({e:e,per:per,segs:segs,paid:paid,rem:per*(e.cuotas-paid),
+      curN:firstOpen+1,started:paid>0||fi<=moIdx(new Date().getMonth()+1,new Date().getFullYear()),fi:fi});
   });
   list.sort(function(a,b){return b.rem-a.rem;});
   var tot=list.reduce(function(s,q){return s+q.rem;},0);
   var h='<div class="summary"><div class="s-l">Comprometido a futuro</div><div class="s-v">'+fmt(tot)+'</div>'+
-   '<div class="s-s">'+list.length+' compra'+(list.length!==1?"s":"")+' en cuotas activa'+(list.length!==1?"s":"")+'</div></div>';
+   '<div class="s-s">'+list.length+' compra'+(list.length!==1?"s":"")+' en cuotas · descuenta al debitarse</div></div>';
   if(!list.length){h+='<div class="empty"><div class="empty-i">\u{1F389}</div><div>No tenés cuotas pendientes</div></div>';document.getElementById("main").innerHTML=h;return;}
   list.forEach(function(q){
     var e=q.e,c=cat(e.catRaw);
     h+='<div class="qc"><div class="qc-t"><div><div class="qc-n">'+c.icon+' '+esc(e.desc||c.n)+'</div>'+
      '<div class="qc-meta"><span class="badge '+e.card+'">'+(e.card==="visa"?"Visa":"MP")+'</span> '+fmtD(e.date)+' · '+fmt(q.per)+'/mes</div></div>'+
      '<div><div class="qc-a">'+fmt(q.rem)+'</div><div class="qc-sub">restante</div></div></div><div class="qc-b">';
-    for(var k=1;k<=e.cuotas;k++){
-      var col=k<=q.paid?c.color:(k===q.cn&&q.started?"var(--amb)":"var(--bg3)");
-      h+='<div class="qseg" style="background:'+col+'"></div>';}
+    q.segs.forEach(function(p,i){
+      var col=p?c.color:(i===q.curN-1&&q.started?"var(--amb)":"var(--bg3)");
+      h+='<div class="qseg" style="background:'+col+'"></div>';});
     h+='</div><div style="font-size:10px;color:var(--fg3);margin-top:5px;display:flex;justify-content:space-between">'+
-     '<span>'+(q.started?"Cuota "+Math.min(q.cn,e.cuotas)+" de "+e.cuotas:"Empieza "+mn(((q.fi-1)%12)+1))+'</span><span>Total '+fmt(e.total)+'</span></div></div>';
+     '<span>'+(q.started?"Debitadas "+q.paid+" de "+e.cuotas:"Empieza "+mn(((q.fi-1)%12)+1))+'</span><span>Total '+fmt(e.total)+'</span></div></div>';
   });
   document.getElementById("main").innerHTML=h;
 }
