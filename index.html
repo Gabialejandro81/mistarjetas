@@ -256,14 +256,15 @@ function previewMes(dateS,card){
   var d=ser2date(cand[0].resumenS);return{m:mOf(d),y:yOf(d)};
 }
 function nextId(){
-  var mx=0;
+  var mx=sheetMaxId;
   movs.forEach(function(e){if(typeof e.id==="number"&&e.id>mx)mx=e.id;});
   queue.forEach(function(q){if(typeof q.id==="number"&&q.id>mx)mx=q.id;});
   return mx+1;
 }
-/* fórmula de "Mes primer cuota" — versión independiente de la fila (usa ROW()).
-   Vía API las fórmulas van SIEMPRE en sintaxis canónica: comas, funciones en inglés. */
-var FORMULA_G='=LET(r,MINIFS(Cierres!$D$2:$D,Cierres!$A$2:$A,INDEX($B:$B,ROW()),Cierres!$G$2:$G,">="&INDEX($A:$A,ROW())),IF(r=0,"SIN CIERRE",r))';
+/* fórmula de "Mes primer cuota" — la app escribe el VALOR (serial de 1/mes/año),
+   no una fórmula, porque USER_ENTERED interpreta fórmulas en el locale del Sheet
+   (español = punto y coma) y no en sintaxis canónica. El valor es inmune al locale.
+   Para gastos cargados a mano en el Sheet, la fórmula en G sigue funcionando. */
 
 /* ════════ PARSEO ════════ */
 function mkMov(dateS,card,catRaw,desc,total,cuotas,fmS,id){
@@ -271,15 +272,20 @@ function mkMov(dateS,card,catRaw,desc,total,cuotas,fmS,id){
   return{dateS:dateS,date:ser2date(dateS),card:card,catRaw:catRaw,desc:desc,total:total,cuotas:cuotas,
     fmS:fmS,fm:mOf(fd),fy:yOf(fd),id:id};
 }
+var sheetMaxId=0,skippedRows=0;
+function rowEmpty(r){if(!r)return true;for(var i=0;i<r.length;i++){if(r[i]!==""&&r[i]!==null&&r[i]!==undefined)return false;}return true;}
 function parseMovs(rows){
-  var out=[],skipped=0;
+  var out=[];sheetMaxId=0;skippedRows=0;
   (rows||[]).forEach(function(r){
-    var dateS=r[0],card=cardKey(r[1]),catRaw=r[2],desc=r[3],total=r[4],cuotas=r[5],fmS=r[6],id=r[7];
-    if(typeof dateS!=="number"||typeof total!=="number"||typeof fmS!=="number"){skipped++;return;}
+    if(rowEmpty(r))return;                                /* fila vacía de la Tabla: se ignora en silencio */
+    var id=r[7];
+    if(typeof id==="number"&&id>sheetMaxId)sheetMaxId=id;  /* el ID cuenta aunque la fila no se pueda leer */
+    var dateS=r[0],card=cardKey(r[1]),catRaw=r[2],desc=r[3],total=r[4],cuotas=r[5],fmS=r[6];
+    if(typeof dateS!=="number"||typeof total!=="number"||typeof fmS!=="number"){skippedRows++;return;}
     cuotas=parseInt(cuotas)||1;if(cuotas<1)cuotas=1;
     out.push(mkMov(dateS,card,catRaw,desc,total,cuotas,fmS,id));
   });
-  return{movs:out,skipped:skipped};
+  return{movs:out,skipped:skippedRows};
 }
 function parseCierres(rows){
   return(rows||[]).map(function(r){
@@ -308,8 +314,9 @@ function tokenOk(){return token&&Date.now()<tokenExp;}
 /* ════════ ESCRITURA ════════ */
 function appendRow(q){
   /* Valores nativos JSON (números como números) → sin ambigüedad de locale.
-     La fórmula de G va como string "=..." y la evalúa el Sheet. */
-  var row=[q.dateS,cardName(q.card),q.catRaw,q.desc,q.total,q.cuotas,FORMULA_G,q.id];
+     La columna G va como VALOR (serial de 1/mes/año), calculado con la misma
+     tabla Cierres que usa la fórmula del Sheet. */
+  var row=[q.dateS,cardName(q.card),q.catRaw,q.desc,q.total,q.cuotas,q.fmS,q.id];
   var url="https://sheets.googleapis.com/v4/spreadsheets/"+SHEET_ID+
     "/values/"+encodeURIComponent("TARJETAS!A:H")+":append"+
     "?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS";
@@ -452,6 +459,7 @@ function render(){
   if(fatal)h+='<div class="err"><b>⚠ '+esc(fatal)+'</b>'+(fatal.indexOf("expir")>=0?'<br><br><button class="gbtn" style="margin:6px auto 0" id="relog">Volver a conectar</button>':'')+'</div>';
   if(offline&&movs.length)h+='<div class="banner">Sin conexión · mostrando la última copia'+(lastSync?" ("+new Date(lastSync).toLocaleString("es-AR")+")":"")+'</div>';
   if(queue.length)h+='<div class="qbanner" id="qb">'+queue.length+' gasto'+(queue.length>1?"s":"")+' pendiente'+(queue.length>1?"s":"")+' de subir · tocá para reintentar</div>';
+  if(skippedRows>0)h+='<div class="banner">⚠ '+skippedRows+' fila'+(skippedRows>1?"s":"")+' del Sheet no se '+(skippedRows>1?"pudieron":"pudo")+' leer — revisá la columna "Mes primer cuota" (¿dice ERROR o SIN CIERRE?)</div>';
 
   if(movs.length){
     h+=vCards()+vFilter()+vTabs()+'<div class="cnt" id="main"></div>';
