@@ -203,7 +203,7 @@ function cardName(k){return k==="visa"?"Visa":(k==="mp"?"MercadoPago":k);}
 
 /* ════════ ESTADO ════════ */
 var token=null,tokenExp=0,tokenClient=null;
-var movs=[],cierres=[],theme="dark",aTab="resumen",selMo=null,cardFil="all",searchQ="",loading=false,offline=false,lastSync=null,fatal=null;
+var movs=[],cierres=[],theme="dark",aTab="resumen",selMo=null,cardFil="all",searchQ="",loading=false,offline=false,stale=false,lastSync=null,fatal=null;
 
 /* ════════ UTILS ════════ */
 function ser2date(s){if(typeof s!=="number")return null;return new Date(Date.UTC(1899,11,30)+Math.floor(s)*86400000);}
@@ -410,7 +410,7 @@ function sync(){
      movs=pm.movs;
      cierres=parseCierres((vr[1]||{}).values);
      addPendingToMovs();
-     lastSync=Date.now();offline=false;loading=false;
+     lastSync=Date.now();offline=false;stale=false;loading=false;
      if(!movs.length)fatal="El Sheet respondió pero no trajo movimientos. ¿La pestaña se llama TARJETAS?";
      saveCache();selMo=null;render();
    })
@@ -504,6 +504,7 @@ function render(){
   var h=vHdr();
   if(fatal)h+='<div class="err"><b>⚠ '+esc(fatal)+'</b>'+(fatal.indexOf("expir")>=0?'<br><br><button class="gbtn" style="margin:6px auto 0" id="relog">Volver a conectar</button>':'')+'</div>';
   if(offline&&movs.length)h+='<div class="banner">Sin conexión · mostrando la última copia'+(lastSync?" ("+new Date(lastSync).toLocaleString("es-AR")+")":"")+'</div>';
+  else if(stale&&movs.length)h+='<div class="qbanner" id="sb">Mostrando la última copia guardada · tocá para actualizar</div>';
   if(queue.length)h+='<div class="qbanner" id="qb">'+queue.length+' gasto'+(queue.length>1?"s":"")+' pendiente'+(queue.length>1?"s":"")+' de subir · tocá para reintentar</div>';
   if(skippedRows>0)h+='<div class="banner">⚠ '+skippedRows+' fila'+(skippedRows>1?"s":"")+' del Sheet no se '+(skippedRows>1?"pudieron":"pudo")+' leer — revisá la columna "Mes primer cuota" (¿dice ERROR o SIN CIERRE?)</div>';
 
@@ -515,7 +516,8 @@ function render(){
   bindHdr();
   var rl=document.getElementById("relog");if(rl)rl.onclick=relogin;
   var qb=document.getElementById("qb");if(qb)qb.onclick=function(){if(!loading)sync();};
-  var fb=document.getElementById("fab");if(fb)fb.onclick=rForm;
+  var sb=document.getElementById("sb");if(sb)sb.onclick=function(){if(!loading)sync();};
+  var fb=document.getElementById("fab");if(fb)fb.onclick=function(){rForm(null);};  /* wrapper: sin él, el MouseEvent llega como editId */
   if(!movs.length)return;
   bindCards();
   if(aTab==="resumen")rResumen();
@@ -877,7 +879,7 @@ function rForm(editId){
     var desc=(document.getElementById("fdesc").value||"").trim();
 
     if(ed){
-      if(!tokenOk()||offline){alert("Editar necesita conexión. Probá cuando tengas señal.");return;}
+      if(!tokenOk()){alert("Editar necesita conexión con Google. Tocá 🔄 para entrar y probá de nuevo.");return;}
       loading=true;fatal=null;close();render();
       updateRow(ed.id,[s,cardName(card),catV,desc,amt,cu,fmS,ed.id])
        .then(function(){sync();})
@@ -891,7 +893,7 @@ function rForm(editId){
 
   var delBtn=document.getElementById("fdel");
   if(delBtn)delBtn.onclick=function(){
-    if(!tokenOk()||offline){alert("Borrar necesita conexión. Probá cuando tengas señal.");return;}
+    if(!tokenOk()){alert("Borrar necesita conexión con Google. Tocá 🔄 para entrar y probá de nuevo.");return;}
     if(!confirm("¿Borrar \""+(ed.desc||cat(ed.catRaw).n)+"\" de "+fmt(ed.total)+"? Se vacía la fila en el Sheet."))return;
     loading=true;fatal=null;close();render();
     clearRow(ed.id)
@@ -981,7 +983,7 @@ function rConfig(){
 /* ════════ INIT ════════ */
 loadTheme();
 loadQueue();
-if(loadCache())offline=true;   /* arranca mostrando la copia local si existe */
+if(loadCache())stale=true;     /* arranca mostrando la copia local; no es "sin red", es "sin sincronizar aún" */
 addPendingToMovs();
 render();
 initAuth();                    /* el login siempre lo dispara un tap del usuario */
