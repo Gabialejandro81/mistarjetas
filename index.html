@@ -369,11 +369,33 @@ function updateRow(id,vals){
      .then(function(r){if(r.status===401||r.status===403)throw new Error("AUTH");if(!r.ok)throw new Error("HTTP "+r.status);return r.json();});
   });
 }
-function clearRow(id){
-  return findRowById(id).then(function(row){
-    var url="https://sheets.googleapis.com/v4/spreadsheets/"+SHEET_ID+"/values/"+
-      encodeURIComponent("TARJETAS!A"+row+":H"+row)+":clear";
-    return fetch(url,{method:"POST",headers:{Authorization:"Bearer "+token,"Content-Type":"application/json"},body:"{}"})
+/* El sheetId numérico (gid) de la pestaña TARJETAS: hace falta para borrar filas.
+   Lo pido una vez y lo cacheo — así no depende de un número hardcodeado que
+   podría cambiar si alguna vez recreás la pestaña. */
+var tarjetasGid=null;
+function getGid(){
+  if(tarjetasGid!==null)return Promise.resolve(tarjetasGid);
+  var url="https://sheets.googleapis.com/v4/spreadsheets/"+SHEET_ID+"?fields=sheets.properties(sheetId,title)";
+  return fetch(url,{headers:{Authorization:"Bearer "+token}})
+   .then(function(r){
+     if(r.status===401||r.status===403)throw new Error("AUTH");
+     if(!r.ok)throw new Error("HTTP "+r.status);
+     return r.json();
+   })
+   .then(function(d){
+     var found=null;
+     (d.sheets||[]).forEach(function(s){if(s.properties&&s.properties.title==="TARJETAS")found=s.properties.sheetId;});
+     if(found===null)throw new Error("NOSHEET");
+     tarjetasGid=found;return found;
+   });
+}
+function deleteRow(id){
+  return Promise.all([findRowById(id),getGid()]).then(function(res){
+    var row=res[0],gid=res[1];
+    var url="https://sheets.googleapis.com/v4/spreadsheets/"+SHEET_ID+":batchUpdate";
+    return fetch(url,{method:"POST",headers:{Authorization:"Bearer "+token,"Content-Type":"application/json"},
+      body:JSON.stringify({requests:[{deleteDimension:{range:{sheetId:gid,dimension:"ROWS",
+        startIndex:row-1,endIndex:row}}}]})})   /* startIndex es 0-based: fila 5 → índice 4 */
      .then(function(r){if(r.status===401||r.status===403)throw new Error("AUTH");if(!r.ok)throw new Error("HTTP "+r.status);return r.json();});
   });
 }
@@ -381,6 +403,7 @@ function writeErr(e){
   if(e.message==="AUTH")return"La sesión con Google expiró. Volvé a entrar.";
   if(e.message==="NOTFOUND")return"No encontré ese gasto en el Sheet. Quizá ya se borró. Sincronizá.";
   if(e.message==="DUP")return"Hay dos filas con el mismo ID en el Sheet. Corregilo a mano antes de editar.";
+  if(e.message==="NOSHEET")return"No encontré la pestaña TARJETAS en el Sheet.";
   return"No se pudo escribir ("+e.message+"). Probá de nuevo.";
 }
 
@@ -894,9 +917,9 @@ function rForm(editId){
   var delBtn=document.getElementById("fdel");
   if(delBtn)delBtn.onclick=function(){
     if(!tokenOk()){alert("Borrar necesita conexión con Google. Tocá 🔄 para entrar y probá de nuevo.");return;}
-    if(!confirm("¿Borrar \""+(ed.desc||cat(ed.catRaw).n)+"\" de "+fmt(ed.total)+"? Se vacía la fila en el Sheet."))return;
+    if(!confirm("¿Borrar \""+(ed.desc||cat(ed.catRaw).n)+"\" de "+fmt(ed.total)+"?\n\nSe elimina la fila del Sheet. Si te arrepentís, está en el historial de versiones."))return;
     loading=true;fatal=null;close();render();
-    clearRow(ed.id)
+    deleteRow(ed.id)
      .then(function(){sync();})
      .catch(function(e){loading=false;if(e.message==="AUTH"){token=null;}fatal=writeErr(e);render();});
   };
